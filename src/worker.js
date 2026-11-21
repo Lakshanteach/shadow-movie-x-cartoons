@@ -1,6 +1,16 @@
 const BASE_URL = "https://cartoons.lk/";
 const CREATOR = "👨‍💻 CREATOR BY  SHADOW MOVIE X MAIN OWNER 👨‍💻";
 
+const CATEGORY_MAP = {
+  series: "https://cartoons.lk/category/tv-series/",
+  "tv-series": "https://cartoons.lk/category/tv-series/",
+  tvseries: "https://cartoons.lk/category/tv-series/",
+  cartoons: "https://cartoons.lk/category/cartoons/",
+  cartoon: "https://cartoons.lk/category/cartoons/",
+  movies: "https://cartoons.lk/category/movies/",
+  movie: "https://cartoons.lk/category/movies/"
+};
+
 const HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
@@ -50,10 +60,8 @@ function hasTelegramSignature(str = "") {
 
 function isCommentOrJunkLink(href = "", label = "") {
   const combined = `${href} ${label}`.toLowerCase();
-  return (
-    /#comments\b|\bdiscuss\b|\bdiscussion\b|\bcomments?\b|\breply\b|\blogin\b|\bregister\b/i.test(
-      combined
-    )
+  return /#comments\b|\bdiscuss\b|\bdiscussion\b|\bcomments?\b|\breply\b|\blogin\b|\bregister\b/i.test(
+    combined
   );
 }
 
@@ -99,18 +107,18 @@ function isBadImage(url = "") {
   return /icon|logo|favicon|sprite|avatar|emoji|placeholder|blank|loader/i.test(url);
 }
 
-function detectItemType(url = "", title = "") {
+function detectItemType(url = "", title = "", fallbackType = null) {
   const combined = `${url} ${title}`.toLowerCase();
   if (/[?&]ep=\d+|\b(?:ep|episode|s\d{1,2}e\d{1,3})\b|\/episodes?\b/i.test(combined)) {
-    return "episode";
+    return fallbackType === "series" ? "series" : "episode";
   }
-  if (/\b(?:series|tv\s*show|drama|korean\s*drama|anime|season\s*\d+)\b|\/(?:series|tvshows|seasons)\b/i.test(combined)) {
+  if (/\b(?:series|tv\s*show|drama|korean\s*drama|season\s*\d+|\d+\s*eps?)\b|\/(?:series|tvshows|tv-series|seasons)\b/i.test(combined)) {
     return "series";
   }
   if (/\bmovie\b|\/movies?\b/i.test(combined)) {
     return "movie";
   }
-  return "cartoon";
+  return fallbackType || "cartoon";
 }
 
 function detectQuality(text = "") {
@@ -130,6 +138,11 @@ function detectSize(text = "") {
   return { size, bytes };
 }
 
+function extractEpsCount(text = "") {
+  const m = String(text).match(/\b(\d+)\s*EPS?\b/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
 async function fetchHtml(targetUrl, timeoutMs = 12000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -142,7 +155,7 @@ async function fetchHtml(targetUrl, timeoutMs = 12000) {
   }
 }
 
-function parseSearchResults(html, baseUrl) {
+function parseCardsOrLinks(html, baseUrl, forcedType = null) {
   const items = [];
   const seen = new Set();
 
@@ -154,8 +167,17 @@ function parseSearchResults(html, baseUrl) {
     const segments = u.pathname.split("/").filter(Boolean);
     if (segments.length === 0 || segments.length > 3) continue;
 
+    const idx = typeof m.index === "number" ? m.index : 0;
+    const aroundHtml = html.slice(Math.max(0, idx - 300), Math.min(html.length, idx + m[0].length + 300));
+    const aroundText = stripTags(aroundHtml);
     const label = stripTags(m[2]);
+
     if (isCommentOrJunkLink(url, label) || hasTelegramSignature(url) || hasTelegramSignature(label)) {
+      continue;
+    }
+
+    // Skip top menu/filter links that match category names directly
+    if (/^(?:cartoons?|korean\s*dramas?|movies?|tv\s*series|home|search)$/i.test(label)) {
       continue;
     }
 
@@ -171,13 +193,18 @@ function parseSearchResults(html, baseUrl) {
 
     if (!title || title.length < 2) continue;
 
-    const imgM = m[2].match(/<img\b[^>]*(?:data-src|data-lazy-src|src)=["']([^"']+)["'][^>]*>/i);
+    const imgM = (m[2] + aroundHtml).match(/<img\b[^>]*(?:data-src|data-lazy-src|src)=["']([^"']+)["'][^>]*>/i);
     const imgUrl = imgM ? resolveUrl(imgM[1], url) : null;
+
+    const epsCount = extractEpsCount(`${label} ${aroundText}`);
+    const badgeQuality = detectQuality(`${label} ${aroundText}`);
 
     seen.add(url);
     items.push({
       title,
-      type: detectItemType(url, title),
+      type: detectItemType(url, title, forcedType),
+      episodesCount: epsCount,
+      quality: badgeQuality,
       url,
       image: imgUrl && !isBadImage(imgUrl) ? imgUrl : null
     });
@@ -337,7 +364,6 @@ function extractQualities(html, pageUrl, fallbackUrl) {
     }
   }
 
-  // Site එකේ quality buttons නැත්නම් 480p / 720p / 1080p default options ලබාදෙයි
   if (picked.length === 0) {
     return targetQualities.map((q) => ({
       quality: q,
@@ -400,9 +426,40 @@ export default {
       return jsonResponse({
         ok: true,
         source: BASE_URL,
-        supports: ["cartoon episodes", "movies", "series"],
-        endpoints: ["/search?q=...", "/info?url=...", "/dl?url=..."]
+        categories: ["tv-series", "cartoons", "movies"],
+        endpoints: ["/category?type=series|cartoons|movies", "/search?q=...", "/info?url=...", "/dl?url=..."]
       });
+    }
+
+    if (path === "/category") {
+      const rawType = (urlObj.searchParams.get("type") || "").trim().toLowerCase();
+      const targetUrl = CATEGORY_MAP[rawType];
+      if (!targetUrl) {
+        return jsonResponse(
+          { ok: false, error: "Pass ?type=series, ?type=cartoons, or ?type=movies" },
+          400
+        );
+      }
+
+      try {
+        const html = await fetchHtml(targetUrl);
+        const normalizedType =
+          rawType.startsWith("series") || rawType.includes("tv")
+            ? "series"
+            : rawType.startsWith("movie")
+            ? "movie"
+            : "cartoon";
+        const items = parseCardsOrLinks(html, targetUrl, normalizedType);
+        return jsonResponse({
+          ok: true,
+          category: normalizedType,
+          url: targetUrl,
+          total: items.length,
+          items
+        });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message || "Category fetch failed" }, 500);
+      }
     }
 
     if (path === "/search") {
@@ -412,7 +469,7 @@ export default {
       try {
         const searchUrl = `${BASE_URL}?s=${encodeURIComponent(q)}`;
         const html = await fetchHtml(searchUrl);
-        let items = parseSearchResults(html, searchUrl);
+        let items = parseCardsOrLinks(html, searchUrl, null);
 
         const typeFilter = (urlObj.searchParams.get("type") || "").trim().toLowerCase();
         if (typeFilter) {
