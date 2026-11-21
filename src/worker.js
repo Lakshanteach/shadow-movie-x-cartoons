@@ -255,9 +255,17 @@ function extractSeasonsAndEpisodes(html, pageUrl, mainTitle = "") {
     u.hash = "";
     const cleanUrl = u.toString();
 
-    const epParam = u.searchParams.get("ep");
-    const epTextMatch = label.match(/\b(?:ep(?:isode)?)\s*0*(\d{1,3})\b/i);
-    const epNum = epParam ? parseInt(epParam, 10) : epTextMatch ? parseInt(epTextMatch[1], 10) : null;
+    const epParam = u.searchParams.get("ep") || u.searchParams.get("episode");
+    const epTextMatch =
+      label.match(/^(?:ep(?:isode)?)\s*0*(\d{1,3})$/i) ||
+      label.match(/\b(?:ep(?:isode)?)\s*0*(\d{1,3})\b/i) ||
+      cleanUrl.match(/[?&]ep=0*(\d{1,3})\b/i);
+
+    const epNum = epParam
+      ? parseInt(epParam, 10)
+      : epTextMatch
+      ? parseInt(epTextMatch[1], 10)
+      : null;
 
     if (epNum && epNum > 0 && !seenEpisodes.has(epNum)) {
       seenEpisodes.add(epNum);
@@ -283,6 +291,23 @@ function extractSeasonsAndEpisodes(html, pageUrl, mainTitle = "") {
           title: sMatch ? `Season ${sMatch[1]}` : label,
           type: "series",
           url: cleanUrl
+        });
+      }
+    }
+  }
+
+  // Page එකේ "22 EPS" වගේ count එකක් තියෙනවා නම් සහ links ටිකක් හෝ තියෙනවා නම්, links නැති වුණත් ep list එකක් fallback විදියට හදන්න පුළුවන්
+  if (episodes.length === 0) {
+    const epsCount = extractEpsCount(`${mainTitle} ${stripTags(html).slice(0, 2000)}`);
+    if (epsCount && epsCount > 0 && epsCount <= 100) {
+      for (let i = 1; i <= epsCount; i++) {
+        const epUrlObj = new URL(pageUrl);
+        epUrlObj.searchParams.set("ep", String(i));
+        episodes.push({
+          episode: i,
+          title: `Episode ${i}`,
+          type: "episode",
+          url: epUrlObj.toString()
         });
       }
     }
