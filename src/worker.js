@@ -193,7 +193,6 @@ function extractSeasonsAndEpisodes(html, pageUrl, mainTitle = "") {
   const seenEpisodes = new Set();
   const baseObj = new URL(pageUrl);
 
-  // Extract base show name words (e.g., "ben 10 ultimate alien") to filter matching seasons
   const showWords = mainTitle
     .toLowerCase()
     .replace(/\b(?:season\s*\d+|sinhala\s*dubbed|cartoon|series|tv\s*show|free\s*download|cartoons\.lk|\|.*$)\b/gi, " ")
@@ -219,7 +218,6 @@ function extractSeasonsAndEpisodes(html, pageUrl, mainTitle = "") {
     u.hash = "";
     const cleanUrl = u.toString();
 
-    // 1. Episode links (?ep=1, ?ep=2, etc.)
     const epParam = u.searchParams.get("ep");
     const epTextMatch = label.match(/\b(?:ep(?:isode)?)\s*0*(\d{1,3})\b/i);
     const epNum = epParam ? parseInt(epParam, 10) : epTextMatch ? parseInt(epTextMatch[1], 10) : null;
@@ -235,7 +233,6 @@ function extractSeasonsAndEpisodes(html, pageUrl, mainTitle = "") {
       continue;
     }
 
-    // 2. Matching Season links (only if same show slug/title and not current page)
     if (u.pathname !== baseObj.pathname && /season[-\s]?\d+/i.test(`${cleanUrl} ${label}`)) {
       const targetLower = `${cleanUrl} ${label}`.toLowerCase();
       const matchesShow =
@@ -263,12 +260,13 @@ function extractSeasonsAndEpisodes(html, pageUrl, mainTitle = "") {
   };
 }
 
-function extractQualities(html, pageUrl) {
+function extractQualities(html, pageUrl, fallbackUrl) {
   const candidates = [];
   const seen = new Set();
 
-  // Check iframes / video sources / direct download links (never comment or season links)
-  for (const m of html.matchAll(/<(?:a|iframe|source)\b[^>]*\b(?:href|src)=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>|<(?:iframe|source)\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi)) {
+  for (const m of html.matchAll(
+    /<(?:a|iframe|source)\b[^>]*\b(?:href|src)=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>|<(?:iframe|source)\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi
+  )) {
     const rawHref = m[1] || m[3];
     const href = resolveUrl(rawHref, pageUrl);
     if (!href || seen.has(href)) continue;
@@ -339,6 +337,17 @@ function extractQualities(html, pageUrl) {
     }
   }
 
+  // Site එකේ quality buttons නැත්නම් 480p / 720p / 1080p default options ලබාදෙයි
+  if (picked.length === 0) {
+    return targetQualities.map((q) => ({
+      quality: q,
+      label: `Watch / Download ${q}`,
+      size: "MB / GB",
+      bytes: 0,
+      url: fallbackUrl || pageUrl
+    }));
+  }
+
   return picked;
 }
 
@@ -364,8 +373,9 @@ async function parseInfo(html, pageUrl) {
   }
 
   const title = titleMatch ? stripTags(titleMatch[1]) : null;
-  const qualities = extractQualities(html, pageUrl);
   const { seasons, episodes } = extractSeasonsAndEpisodes(html, pageUrl, title || "");
+  const primaryStreamTarget = episodes[0]?.url || pageUrl;
+  const qualities = extractQualities(html, pageUrl, primaryStreamTarget);
 
   return {
     title,
@@ -416,7 +426,18 @@ export default {
     }
 
     if (path === "/info" || path === "/dl") {
-      const target = (urlObj.searchParams.get("url") || "").trim();
+      const rawTarget = (urlObj.searchParams.get("url") || "").trim();
+      const epParam = (urlObj.searchParams.get("ep") || "").trim();
+      let target = rawTarget;
+
+      if (target && epParam) {
+        try {
+          const u = new URL(target);
+          if (!u.searchParams.get("ep")) u.searchParams.set("ep", epParam);
+          target = u.toString();
+        } catch (_) {}
+      }
+
       if (!target || !isAllowedTarget(target)) {
         return jsonResponse({ ok: false, error: "Pass valid ?url=https://cartoons.lk/..." }, 400);
       }
