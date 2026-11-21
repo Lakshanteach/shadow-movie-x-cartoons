@@ -92,10 +92,10 @@ function isBadImage(url = "") {
 
 function detectItemType(url = "", title = "") {
   const combined = `${url} ${title}`.toLowerCase();
-  if (/\b(?:ep|episode|s\d{1,2}e\d{1,3}|season\s*\d+|part\s*\d+)\b|\/episodes?\b/i.test(combined)) {
+  if (/\b(?:ep|episode|s\d{1,2}e\d{1,3})\b|\/episodes?\b/i.test(combined)) {
     return "episode";
   }
-  if (/\b(?:series|tv\s*show|drama|korean\s*drama|anime)\b|\/(?:series|tvshows|seasons)\b/i.test(combined)) {
+  if (/\b(?:series|tv\s*show|drama|korean\s*drama|anime|season\s*\d+|\d+\s*eps?)\b|\/(?:series|tvshows|seasons)\b/i.test(combined)) {
     return "series";
   }
   if (/\bmovie\b|\/movies?\b/i.test(combined)) {
@@ -173,8 +173,9 @@ function parseSearchResults(html, baseUrl) {
   return items;
 }
 
-function extractEpisodesOrLinks(html, pageUrl) {
-  const items = [];
+function extractSeasonsAndEpisodes(html, pageUrl) {
+  const seasons = [];
+  const episodes = [];
   const seen = new Set();
   const currentPath = new URL(pageUrl).pathname;
 
@@ -188,17 +189,28 @@ function extractEpisodesOrLinks(html, pageUrl) {
     const label = stripTags(m[2]);
     if (!label || hasTelegramSignature(href) || hasTelegramSignature(label)) continue;
 
-    if (/\b(?:ep|episode|season|part|watch|download)\b/i.test(`${href} ${label}`)) {
+    const combined = `${href} ${label}`;
+    if (/\b(?:ep|episode|s\d{1,2}e\d{1,3})\b/i.test(combined)) {
       seen.add(href);
-      items.push({
+      episodes.push({
         title: label,
-        type: detectItemType(href, label),
+        type: "episode",
+        url: href
+      });
+    } else if (/\b(?:season\s*\d+|\d+\s*eps?)\b/i.test(combined)) {
+      seen.add(href);
+      seasons.push({
+        title: label,
+        type: "series",
         url: href
       });
     }
   }
 
-  return items.slice(0, 40);
+  return {
+    seasons: seasons.slice(0, 20),
+    episodes: episodes.slice(0, 40)
+  };
 }
 
 function extractQualities(html, pageUrl) {
@@ -210,7 +222,7 @@ function extractQualities(html, pageUrl) {
     if (!href || seen.has(href)) continue;
 
     const idx = typeof m.index === "number" ? m.index : 0;
-    const aroundHtml = html.slice(Math.max(0, idx - 600), Math.min(html.length, idx + m[0].length + 600));
+    const aroundHtml = html.slice(Math.max(0, idx - 500), Math.min(html.length, idx + m[0].length + 500));
     const aroundText = stripTags(aroundHtml);
     const label = stripTags(m[2]) || "Download";
 
@@ -222,29 +234,35 @@ function extractQualities(html, pageUrl) {
       continue;
     }
 
+    // Skip season/series navigation links from qualities
+    if (/\b(?:season\s*\d+|\d+\s*eps?)\b/i.test(`${href} ${label}`)) continue;
+
     try {
       const u = new URL(href);
       if (isAllowedTarget(href) && isNavOrCategoryPath(href)) continue;
+      if (isAllowedTarget(href) && u.pathname === new URL(pageUrl).pathname) continue;
 
-      const isInternalLink = isAllowedTarget(href) && !/\.(?:jpg|jpeg|png|webp|css|js)$/i.test(u.pathname);
+      const quality = detectQuality(`${label} ${aroundText} ${href}`);
+      const sizeInfo = detectSize(`${label} ${aroundText}`);
       const isFileHost =
         /(?:pixeldrain|mediafire|mega\.nz|mega\.io|drive\.google\.com|terabox|1024terabox|gofile|1fichier|buzzheavier|vikingfile|akirabox|workupload|send\.cm|streamtape|dood|voe|mixdrop)/i.test(
           u.hostname
         );
-      const isDirectFile =
-        /\.(?:mp4|mkv|avi|webm|zip|rar|7z)(?:\?|$)|\/(?:download|dl|stream|get_file|direct)\b/i.test(
+      const isDirectFileOrDl =
+        /\.(?:mp4|mkv|avi|webm|zip|rar|7z)(?:\?|$)|\/(?:download|dl|stream|get_file|direct)\b|[?&](?:download|dl|file|link)=/i.test(
           href
-        );
+        ) || /\b(?:download|dl|direct\s*link|watch\s*now)\b/i.test(label);
 
-      if (!isInternalLink && !isFileHost && !isDirectFile) continue;
-      if (isInternalLink && u.pathname === new URL(pageUrl).pathname) continue;
+      // Only accept links that look like real download/quality/file links
+      if (!quality && !sizeInfo.size && !isFileHost && !isDirectFileOrDl) continue;
 
       seen.add(href);
       candidates.push({
         label,
         url: href,
-        quality: detectQuality(`${label} ${aroundText} ${href}`),
-        ...detectSize(`${label} ${aroundText}`)
+        quality: quality || "720p",
+        size: sizeInfo.size || "MB / GB",
+        bytes: sizeInfo.bytes || 0
       });
     } catch (_) {}
   }
@@ -261,22 +279,17 @@ function extractQualities(html, pageUrl) {
     }
   }
 
+  // Only fill remaining slots if there are extra real download candidates (never fake season links)
   for (const q of targetQualities) {
     if (picked.some((p) => p.quality === q)) continue;
-    const fb = candidates.find((c) => !used.has(c.url));
-    if (fb) {
-      used.add(fb.url);
-      picked.push({ ...fb, quality: q });
+    const extra = candidates.find((c) => !used.has(c.url));
+    if (extra) {
+      used.add(extra.url);
+      picked.push({ ...extra, quality: q });
     }
   }
 
-  return picked.map((item) => ({
-    quality: item.quality,
-    label: item.label,
-    size: item.size || "MB / GB",
-    bytes: item.bytes || 0,
-    url: item.url
-  }));
+  return picked;
 }
 
 async function parseInfo(html, pageUrl) {
@@ -302,7 +315,7 @@ async function parseInfo(html, pageUrl) {
 
   const title = titleMatch ? stripTags(titleMatch[1]) : null;
   const qualities = extractQualities(html, pageUrl);
-  const episodes = extractEpisodesOrLinks(html, pageUrl);
+  const { seasons, episodes } = extractSeasonsAndEpisodes(html, pageUrl);
 
   return {
     title,
@@ -310,6 +323,7 @@ async function parseInfo(html, pageUrl) {
     image,
     description: descMatch ? stripTags(descMatch[1]).slice(0, 600) : null,
     qualities,
+    seasons,
     episodes
   };
 }
