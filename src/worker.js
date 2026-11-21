@@ -8,7 +8,11 @@ const CATEGORY_MAP = {
   cartoons: "https://cartoons.lk/category/cartoons/",
   cartoon: "https://cartoons.lk/category/cartoons/",
   movies: "https://cartoons.lk/category/movies/",
-  movie: "https://cartoons.lk/category/movies/"
+  movie: "https://cartoons.lk/category/movies/",
+  kdrama: "https://cartoons.lk/category/korean-dramas/",
+  kdramas: "https://cartoons.lk/category/korean-dramas/",
+  "korean-dramas": "https://cartoons.lk/category/korean-dramas/",
+  korean: "https://cartoons.lk/category/korean-dramas/"
 };
 
 const HEADERS = {
@@ -109,11 +113,18 @@ function isBadImage(url = "") {
 
 function detectItemType(url = "", title = "", fallbackType = null) {
   const combined = `${url} ${title}`.toLowerCase();
-  if (/[?&]ep=\d+|\b(?:ep|episode|s\d{1,2}e\d{1,3})\b|\/episodes?\b/i.test(combined)) {
-    return fallbackType === "series" ? "series" : "episode";
+  if (/\b(?:korean\s*drama|kdrama)\b/i.test(combined)) {
+    return "kdrama";
   }
-  if (/\b(?:series|tv\s*show|drama|korean\s*drama|season\s*\d+|\d+\s*eps?)\b|\/(?:series|tvshows|tv-series|seasons)\b/i.test(combined)) {
-    return "series";
+  if (/[?&]ep=\d+|\b(?:ep|episode|s\d{1,2}e\d{1,3})\b|\/episodes?\b/i.test(combined)) {
+    return fallbackType === "series" || fallbackType === "kdrama" ? fallbackType : "episode";
+  }
+  if (
+    /\b(?:series|tv\s*show|drama|season\s*\d+|\d+\s*eps?)\b|\/(?:series|tvshows|tv-series|seasons)\b/i.test(
+      combined
+    )
+  ) {
+    return fallbackType === "kdrama" ? "kdrama" : "series";
   }
   if (/\bmovie\b|\/movies?\b/i.test(combined)) {
     return "movie";
@@ -176,7 +187,6 @@ function parseCardsOrLinks(html, baseUrl, forcedType = null) {
       continue;
     }
 
-    // Skip top menu/filter links that match category names directly
     if (/^(?:cartoons?|korean\s*dramas?|movies?|tv\s*series|home|search)$/i.test(label)) {
       continue;
     }
@@ -222,7 +232,7 @@ function extractSeasonsAndEpisodes(html, pageUrl, mainTitle = "") {
 
   const showWords = mainTitle
     .toLowerCase()
-    .replace(/\b(?:season\s*\d+|sinhala\s*dubbed|cartoon|series|tv\s*show|free\s*download|cartoons\.lk|\|.*$)\b/gi, " ")
+    .replace(/\b(?:season\s*\d+|sinhala\s*dubbed|cartoon|series|tv\s*show|korean\s*drama|free\s*download|cartoons\.lk|\|.*$)\b/gi, " ")
     .replace(/[^a-z0-9\s]/g, " ")
     .trim()
     .split(/\s+/)
@@ -426,8 +436,8 @@ export default {
       return jsonResponse({
         ok: true,
         source: BASE_URL,
-        categories: ["tv-series", "cartoons", "movies"],
-        endpoints: ["/category?type=series|cartoons|movies", "/search?q=...", "/info?url=...", "/dl?url=..."]
+        categories: ["tv-series", "cartoons", "movies", "korean-dramas"],
+        endpoints: ["/category?type=series|cartoons|movies|kdrama", "/search?q=...", "/info?url=...", "/dl?url=..."]
       });
     }
 
@@ -436,7 +446,7 @@ export default {
       const targetUrl = CATEGORY_MAP[rawType];
       if (!targetUrl) {
         return jsonResponse(
-          { ok: false, error: "Pass ?type=series, ?type=cartoons, or ?type=movies" },
+          { ok: false, error: "Pass ?type=series, ?type=cartoons, ?type=movies, or ?type=kdrama" },
           400
         );
       }
@@ -444,7 +454,9 @@ export default {
       try {
         const html = await fetchHtml(targetUrl);
         const normalizedType =
-          rawType.startsWith("series") || rawType.includes("tv")
+          rawType.startsWith("kdrama") || rawType.includes("korean")
+            ? "kdrama"
+            : rawType.startsWith("series") || rawType.includes("tv")
             ? "series"
             : rawType.startsWith("movie")
             ? "movie"
