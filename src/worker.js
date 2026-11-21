@@ -64,7 +64,7 @@ function isNavOrCategoryPath(rawUrl = "") {
     const p = u.pathname.toLowerCase();
     if (!p || p === "/") return true;
     return (
-      /^\/(?:category|categories|tag|tags|genre|genres|about-us|contact-us|privacy-policy|terms|wp-admin|wp-login|feed|author)\/?$/i.test(
+      /^\/(?:category|categories|tag|tags|genre|genres|about-us|contact-us|privacy-policy|terms|wp-admin|wp-login|feed|author)\b/i.test(
         p
       ) ||
       /\/page\/\d+\/?$/i.test(p) ||
@@ -95,7 +95,7 @@ function detectItemType(url = "", title = "") {
   if (/\b(?:ep|episode|s\d{1,2}e\d{1,3}|season\s*\d+|part\s*\d+)\b|\/episodes?\b/i.test(combined)) {
     return "episode";
   }
-  if (/\b(?:series|tv\s*show|drama|anime)\b|\/(?:series|tvshows|seasons)\b/i.test(combined)) {
+  if (/\b(?:series|tv\s*show|drama|korean\s*drama|anime)\b|\/(?:series|tvshows|seasons)\b/i.test(combined)) {
     return "series";
   }
   if (/\bmovie\b|\/movies?\b/i.test(combined)) {
@@ -198,7 +198,7 @@ function extractEpisodesOrLinks(html, pageUrl) {
     }
   }
 
-  return items.slice(0, 30);
+  return items.slice(0, 40);
 }
 
 function extractQualities(html, pageUrl) {
@@ -340,7 +340,6 @@ export default {
         const html = await fetchHtml(searchUrl);
         let items = parseSearchResults(html, searchUrl);
 
-        // Optional filter: ?type=movie|series|episode|cartoon
         const typeFilter = (urlObj.searchParams.get("type") || "").trim().toLowerCase();
         if (typeFilter) {
           items = items.filter((it) => it.type === typeFilter);
